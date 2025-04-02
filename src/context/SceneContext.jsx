@@ -12,7 +12,7 @@ const initialState = {
   activeColor: '#808080', // Default color for shapes
   isRotationEnabled: true, // Camera rotation state
   selectedFurnitureId: null, // Track selected furniture item
-  occupiedGridCells: {}, // Add this line
+  occupiedGridCells: {}, // Make sure this is initialized as an empty object
   houseDimensions: {
     width: 0,
     length: 0,
@@ -156,20 +156,35 @@ function sceneReducer(state, action) {
         selectedFurnitureId: action.payload
       }
     case 'PLACE_FURNITURE':
-      { const placedFurniture = {
-        ...action.payload,
-        id: Date.now(),
-        type: 'furniture'
+      { 
+        const placedFurniture = {
+          ...action.payload,
+          id: Date.now(),
+          type: 'furniture'
+        };
+        
+        // Create a new occupiedGridCells object with the new furniture's cells
+        const newOccupiedGridCells = { ...state.occupiedGridCells };
+        
+        // Add the cells occupied by this furniture
+        if (action.payload.occupiedCells) {
+          Object.keys(action.payload.occupiedCells).forEach(cellKey => {
+            newOccupiedGridCells[cellKey] = true;
+          });
+        }
+        
+        return {
+          ...state,
+          objects: [...state.objects, placedFurniture],
+          occupiedGridCells: newOccupiedGridCells,
+          history: [...state.history.slice(0, state.currentStep + 1), {
+            type: 'PLACE_FURNITURE',
+            data: placedFurniture,
+            occupiedCells: action.payload.occupiedCells
+          }],
+          currentStep: state.currentStep + 1
+        };
       }
-      return {
-        ...state,
-        objects: [...state.objects, placedFurniture],
-        history: [...state.history.slice(0, state.currentStep + 1), {
-          type: 'PLACE_FURNITURE',
-          data: placedFurniture
-        }],
-        currentStep: state.currentStep + 1
-      } }
 
     case 'UNDO':
       if (state.currentStep >= 0) {
@@ -224,6 +239,15 @@ function sceneReducer(state, action) {
           case 'ADD_FURNITURE':
           case 'PLACE_FURNITURE':
             newState.objects = state.objects.filter(obj => obj.id !== lastAction.data.id)
+            
+            // Remove the occupied cells for this furniture
+            if (lastAction.occupiedCells) {
+              const newOccupiedGridCells = { ...state.occupiedGridCells };
+              Object.keys(lastAction.occupiedCells).forEach(cellKey => {
+                delete newOccupiedGridCells[cellKey];
+              });
+              newState.occupiedGridCells = newOccupiedGridCells;
+            }
             break
 
         }
@@ -277,6 +301,15 @@ function sceneReducer(state, action) {
           case 'ADD_FURNITURE':
           case 'PLACE_FURNITURE':
             newState.objects = [...state.objects, nextAction.data]
+            
+            // Add back the occupied cells for this furniture
+            if (nextAction.occupiedCells) {
+              const newOccupiedGridCells = { ...state.occupiedGridCells };
+              Object.keys(nextAction.occupiedCells).forEach(cellKey => {
+                newOccupiedGridCells[cellKey] = true;
+              });
+              newState.occupiedGridCells = newOccupiedGridCells;
+            }
             break
 
           case 'CLEAR_HOUSE_DIMENSIONS':
@@ -304,6 +337,7 @@ export function SceneProvider({ children }) {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useScene() {
   const context = useContext(SceneContext)
   if (!context) {

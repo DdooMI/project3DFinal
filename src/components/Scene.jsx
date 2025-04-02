@@ -41,15 +41,42 @@ function Floor({ position, size, length, color = '#808080' }) {
   )
 }
 
-function FurniturePreview({ position, modelPath, isValid, rotation }) {
-  // Use the FurnitureModel component with preview settings
+function FurniturePreview({ position, modelPath, isValid, rotation, scale }) {
+  // Determine furniture type from model path
+  const furnitureType = modelPath.includes('chair') ? 'chair' : 
+                        modelPath.includes('sofa') ? 'sofa' : 
+                        modelPath.includes('ikea_bed') ? 'ikea_bed' : 'bed';
+  
+  // Create a new position object with proper coordinates
+  const adjustedPosition = { 
+    x: position.x, 
+    y: 0, 
+    z: position.z 
+  };
+  
+  // Apply specific position adjustments for each furniture type
+  if (furnitureType === 'sofa') {
+    // Position sofa to align with grid
+    adjustedPosition.y = 0;
+    // Center the sofa horizontally in its grid cells
+    adjustedPosition.x = position.x + 0.5;
+    adjustedPosition.z = position.z;
+  } else if (furnitureType === 'chair') {
+    // Position chair to align with grid
+    adjustedPosition.y = 0;
+    // Center the chair in its grid cell
+    adjustedPosition.x = position.x + 0.5;
+    adjustedPosition.z = position.z + 0.1;
+  }
+  
   return (
     <FurnitureModel
       modelPath={modelPath}
-      position={{ x: position.x, y: 0, z: position.z }}
+      position={adjustedPosition}
       opacity={0.5}
       color={isValid ? '#00ff00' : '#ff0000'}
       rotation={[0, rotation, 0]}
+      scale={scale || 1}
     />
   )
 }
@@ -95,7 +122,7 @@ export default function Scene() {
         payload: { ...state.houseDimensions }
       })
     }
-  }, [houseDimensionsApplied])
+  }, [dispatch, houseDimensionsApplied, state.houseDimensions])
 
   // Initialize furniture preview when furniture is selected
   useEffect(() => {
@@ -109,14 +136,37 @@ export default function Scene() {
       
       const modelPath = furnitureCategories[state.selectedFurnitureId]
       if (modelPath) {
+        // Define specific sizes for each furniture type
+        let furnitureSize;
+        let furnitureScale;
+        
+        switch(state.selectedFurnitureId) {
+          case 'bed':
+            furnitureSize = { width: 2, length: 2 };
+            furnitureScale = 1;
+            break;
+          case 'ikea_bed':
+            furnitureSize = { width: 1, length: 2 };
+            furnitureScale = 1;
+            break;
+          case 'sofa':
+            furnitureSize = { width: 1, length: 2 };
+            furnitureScale = 0.025;
+            break;
+          case 'chair':
+          default:
+            furnitureSize = { width: 1, length: 1 };
+            furnitureScale = 0.4;
+            break;
+        }
+        
         setFurniturePreview({
           modelPath,
           position: { x: 0, z: 0 },
           isValid: true,
-          size: state.selectedFurnitureId === 'sofa' ? { width: 2, length: 1 } : 
-                state.selectedFurnitureId.includes('bed') ? { width: 2, length: 1 } : 
-                { width: 1, length: 1 } // Default size for other furniture
-        })
+          size: furnitureSize,
+          scale: furnitureScale
+        });
       }
     } else if (!state.activeShape || state.activeShape !== 'furniture') {
       setFurniturePreview(null)
@@ -199,13 +249,18 @@ export default function Scene() {
 
     if (state.activeShape === 'furniture' && furniturePreview) {
       const size = furniturePreview.size || { width: 1, length: 1 };
+      
+      // Check if position is valid before placing
       const isValidPosition = checkFurnitureCollision(snappedPoint, size, previewRotation, state);
       
       if (isValidPosition) {
-        // Create a list of cells to mark as occupied
-        const occupiedCells = {};
+        // Calculate the actual size based on rotation
         const actualSize = previewRotation % Math.PI === 0 ? size : { width: size.length, length: size.width };
         
+        // Create a list of cells to mark as occupied
+        const occupiedCells = {};
+        
+        // Mark all cells as occupied based on the furniture size
         for (let x = 0; x < actualSize.width; x++) {
           for (let z = 0; z < actualSize.length; z++) {
             const cellX = Math.floor(snappedPoint.x + x);
@@ -221,16 +276,19 @@ export default function Scene() {
             modelPath: furniturePreview.modelPath,
             rotation: previewRotation,
             size: size,
+            scale: furniturePreview.scale || 1,
             occupiedCells: occupiedCells
           }
-        })
+        });
         
         // Reset furniture preview position but keep it active for next placement
         setFurniturePreview({
           ...furniturePreview,
           position: { x: 0, z: 0 },
           isValid: true
-        })
+        });
+      } else {
+        console.log("Cannot place furniture here - position is occupied");
       }
     } else if (state.activeShape === 'curved-wall') {
       if (!isCurvedDrawing) {
@@ -265,15 +323,17 @@ export default function Scene() {
     const snappedPoint = snapToGrid(event.point, state.activeShape === 'floor')
 
     if (state.activeShape === 'furniture' && furniturePreview) {
-      // Check if all required grid cells are available
+      // Get the furniture size
       const size = furniturePreview.size || { width: 1, length: 1 };
+      
+      // Check if all required grid cells are available
       const isValidPosition = checkFurnitureCollision(snappedPoint, size, previewRotation, state);
       
       setFurniturePreview({
         ...furniturePreview,
         position: snappedPoint,
         isValid: isValidPosition
-      })
+      });
     } else if (isDrawing && drawingPoints.length > 0) {
       // First snap to grid, then align to vertical/horizontal
       const gridAlignedPoint = snapToGrid(snappedPoint)
@@ -383,6 +443,173 @@ export default function Scene() {
   const visibleWalls = state.walls || [];
   const visibleFloors = state.floors || [];
 
+  // Completely rewritten collision detection system
+
+  // 1. First, let's update the checkFurnitureCollision function
+  const checkFurnitureCollision = (position, size, rotation, state) => {
+    // Early return if state is undefined
+    if (!state) return true;
+
+    // Calculate the actual size based on rotation
+    const actualSize = rotation % Math.PI === 0 ? size : { width: size.length, length: size.width };
+    
+    // Check grid boundaries
+    const halfWidth = state.houseDimensions?.width / 2 || 10;
+    const halfLength = state.houseDimensions?.length / 2 || 10;
+    
+    // Check if furniture would be placed outside the grid
+    if (position.x < -halfWidth || position.x + actualSize.width > halfWidth ||
+        position.z < -halfLength || position.z + actualSize.length > halfLength) {
+      return false;
+    }
+    
+    // Create furniture bounding box
+    const furnitureBounds = {
+      minX: position.x,
+      maxX: position.x + actualSize.width,
+      minZ: position.z,
+      maxZ: position.z + actualSize.length
+    };
+    
+    // Check for collision with walls
+    if (state.walls && state.walls.length > 0) {
+      for (const wall of state.walls) {
+        if (wallIntersectsFurniture(wall, furnitureBounds)) {
+          return false;
+        }
+      }
+    }
+    
+    // Check all grid cells that would be occupied by this furniture
+    for (let x = 0; x < actualSize.width; x++) {
+      for (let z = 0; z < actualSize.length; z++) {
+        const cellX = Math.floor(position.x + x);
+        const cellZ = Math.floor(position.z + z);
+        const key = `${cellX},${cellZ}`;
+        
+        // Check if cell is already occupied by other furniture
+        if (state.occupiedGridCells && state.occupiedGridCells[key]) {
+          return false;
+        }
+      }
+    }
+    
+    return true;
+  };
+
+  // Simplified wall-furniture intersection check
+  const wallIntersectsFurniture = (wall, furnitureBounds) => {
+    // Wall is defined by start and end points
+    const start = wall.start;
+    const end = wall.end;
+    
+    // Wall thickness
+    const thickness = wall.width || 0.2;
+    
+    // For horizontal walls (same Z)
+    if (Math.abs(start.z - end.z) < 0.1) {
+      const wallZ = start.z;
+      const minX = Math.min(start.x, end.x) - thickness/2;
+      const maxX = Math.max(start.x, end.x) + thickness/2;
+      
+      // Check if furniture overlaps with horizontal wall
+      if (furnitureBounds.minZ - thickness/2 <= wallZ && furnitureBounds.maxZ + thickness/2 >= wallZ) {
+        if (!(furnitureBounds.maxX < minX || furnitureBounds.minX > maxX)) {
+          return true;
+        }
+      }
+    }
+    
+    // For vertical walls (same X)
+    if (Math.abs(start.x - end.x) < 0.1) {
+      const wallX = start.x;
+      const minZ = Math.min(start.z, end.z) - thickness/2;
+      const maxZ = Math.max(start.z, end.z) + thickness/2;
+      
+      // Check if furniture overlaps with vertical wall
+      if (furnitureBounds.minX - thickness/2 <= wallX && furnitureBounds.maxX + thickness/2 >= wallX) {
+        if (!(furnitureBounds.maxZ < minZ || furnitureBounds.minZ > maxZ)) {
+          return true;
+        }
+      }
+    }
+    
+    // For diagonal walls, we'll use a more general approach
+    if (Math.abs(start.x - end.x) >= 0.1 && Math.abs(start.z - end.z) >= 0.1) {
+      // Check if any corner of the furniture is too close to the wall line
+      const corners = [
+        { x: furnitureBounds.minX, z: furnitureBounds.minZ },
+        { x: furnitureBounds.maxX, z: furnitureBounds.minZ },
+        { x: furnitureBounds.minX, z: furnitureBounds.maxZ },
+        { x: furnitureBounds.maxX, z: furnitureBounds.maxZ }
+      ];
+      
+      for (const corner of corners) {
+        const dist = pointToLineDistance(corner, start, end);
+        if (dist < thickness/2 + 0.1) {
+          return true;
+        }
+      }
+      
+      // Also check if the wall passes through the furniture
+      const wallPoints = [
+        { x: start.x, z: start.z },
+        { x: end.x, z: end.z }
+      ];
+      
+      for (const point of wallPoints) {
+        if (point.x >= furnitureBounds.minX && point.x <= furnitureBounds.maxX &&
+            point.z >= furnitureBounds.minZ && point.z <= furnitureBounds.maxZ) {
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  };
+
+  // Helper function to calculate distance from a point to a line segment
+  const pointToLineDistance = (point, lineStart, lineEnd) => {
+    const dx = lineEnd.x - lineStart.x;
+    const dz = lineEnd.z - lineStart.z;
+    
+    // If the line is just a point, return distance to that point
+    if (dx === 0 && dz === 0) {
+      return Math.sqrt(
+        Math.pow(point.x - lineStart.x, 2) + 
+        Math.pow(point.z - lineStart.z, 2)
+      );
+    }
+    
+    // Calculate projection of point onto line
+    const t = ((point.x - lineStart.x) * dx + (point.z - lineStart.z) * dz) / 
+              (dx * dx + dz * dz);
+    
+    // If projection is outside the line segment, use distance to nearest endpoint
+    if (t < 0) {
+      return Math.sqrt(
+        Math.pow(point.x - lineStart.x, 2) + 
+        Math.pow(point.z - lineStart.z, 2)
+      );
+    }
+    if (t > 1) {
+      return Math.sqrt(
+        Math.pow(point.x - lineEnd.x, 2) + 
+        Math.pow(point.z - lineEnd.z, 2)
+      );
+    }
+    
+    // Calculate the closest point on the line
+    const closestX = lineStart.x + t * dx;
+    const closestZ = lineStart.z + t * dz;
+    
+    // Return the distance to the closest point
+    return Math.sqrt(
+      Math.pow(point.x - closestX, 2) + 
+      Math.pow(point.z - closestZ, 2)
+    );
+  };
+
   return (
     <>
       <group ref={setNodeRef}>
@@ -420,14 +647,44 @@ export default function Scene() {
         ))}
 
         {/* Render placed furniture */}
-        {state.objects.filter(obj => obj.modelPath).map((furniture, index) => (
-          <FurnitureModel
-            key={furniture.id || index}
-            modelPath={furniture.modelPath}
-            position={furniture.position}
-            rotation={furniture.rotation ? [0, furniture.rotation, 0] : [0, 0, 0]}
-          />
-        ))}
+        {state.objects.filter(obj => obj.modelPath).map((furniture, index) => {
+          // Determine furniture type from model path
+          const furnitureType = furniture.modelPath.includes('chair') ? 'chair' : 
+                                furniture.modelPath.includes('sofa') ? 'sofa' : 
+                                furniture.modelPath.includes('ikea_bed') ? 'ikea_bed' : 'bed';
+          
+          // Create a new position object with proper coordinates
+          const adjustedPosition = { 
+            x: furniture.position.x, 
+            y: 0, 
+            z: furniture.position.z 
+          };
+          
+          // Apply specific position adjustments for each furniture type
+          if (furnitureType === 'sofa') {
+            // Position sofa to align with grid
+            adjustedPosition.y = 0;
+            // Center the sofa horizontally in its grid cells
+            adjustedPosition.x = furniture.position.x + 0.5;
+             adjustedPosition.z = furniture.position.z ;
+          } else if (furnitureType === 'chair') {
+            // Position chair to align with grid
+            adjustedPosition.y = 0;
+            // Center the chair in its grid cell
+            adjustedPosition.x = furniture.position.x +0.5 ;
+            adjustedPosition.z = furniture.position.z +0.1;
+          }
+          
+          return (
+            <FurnitureModel
+              key={furniture.id || index}
+              modelPath={furniture.modelPath}
+              position={adjustedPosition}
+              rotation={furniture.rotation ? [0, furniture.rotation, 0] : [0, 0, 0]}
+              scale={furniture.scale || 1}
+            />
+          );
+        })}
         
         {/* Render furniture preview */}
         {furniturePreview && (
@@ -436,33 +693,11 @@ export default function Scene() {
             modelPath={furniturePreview.modelPath}
             isValid={furniturePreview.isValid}
             rotation={previewRotation}
+            scale={furniturePreview.scale}
           />
         )}
       </group>
       <OrbitControls enableDamping={false} enabled={state.isRotationEnabled} />
     </>
   )
-}
-
-const checkFurnitureCollision = (position, size, rotation, state) => {
-  // Early return if state or occupiedGridCells is undefined
-  if (!state || !state.occupiedGridCells) {
-    return true;
-  }
-
-  // Calculate the actual cells occupied based on rotation
-  const actualSize = rotation % Math.PI === 0 ? size : { width: size.length, length: size.width };
-  
-  // Check all grid cells that would be occupied by this furniture
-  for (let x = 0; x < actualSize.width; x++) {
-    for (let z = 0; z < actualSize.length; z++) {
-      const cellX = Math.floor(position.x + x);
-      const cellZ = Math.floor(position.z + z);
-      const key = `${cellX},${cellZ}`;
-      if (state.occupiedGridCells[key]) {
-        return false;
-      }
-    }
-  }
-  return true;
 }

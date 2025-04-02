@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useMemo } from 'react';
 import { useGLTF } from '@react-three/drei';
+import React, { useEffect, useMemo, useRef } from 'react';
 
 // Define all furniture models with their paths
 const FURNITURE_MODELS = {
@@ -11,7 +11,6 @@ const FURNITURE_MODELS = {
 
 // Preload all models immediately to prevent freezing during placement
 Object.keys(FURNITURE_MODELS).forEach(path => {
-  console.log(`Preloading model: ${path}`);
   useGLTF.preload(path);
 });
 
@@ -30,11 +29,14 @@ export default function FurnitureModel({ modelPath, position, rotation = [0, 0, 
     obj.position.set(position.x, position.y || 0, position.z);
     obj.rotation.set(...rotation);
     
-    // Apply scale
+    // Apply scale - ensure it's applied correctly
     if (typeof scale === 'number') {
       obj.scale.set(scale, scale, scale);
-    } else {
+    } else if (Array.isArray(scale)) {
       obj.scale.set(...scale);
+    } else {
+      // Default scale if none provided
+      obj.scale.set(1, 1, 1);
     }
 
     // Enable shadows and apply opacity/color to all meshes
